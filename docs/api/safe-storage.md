@@ -18,6 +18,10 @@ security semantics for each platform are outlined below.
 other applications from loading them without user override. Therefore, content is protected from other users and other apps running in the same userspace.
 * **Windows**: Encryption keys are generated via [DPAPI](https://learn.microsoft.com/en-us/windows/win32/api/dpapi/nf-dpapi-cryptprotectdata). As per the Windows documentation: "Typically, only a user with the same logon credential as the user who encrypted the data can typically decrypt the data". Therefore, content is protected from other users on the same machine, but not from other apps running in the
 same userspace.
+  To also protect content from other apps running as the same user, call
+  [`safeStorage.setUserVerificationRequirement('required')`](#safestoragesetuserverificationrequirementrequirement-windows).
+  The encryption key is then also protected by a [Windows Hello](https://learn.microsoft.com/en-us/windows/apps/develop/security/windows-hello)
+  key credential, and the user must pass a Windows Hello check to unlock it.
 * **Linux**: Encryption keys are generated and stored in a secret store that varies depending on your window manager and system setup, so the
 security semantics of content protected via the `safeStorage` API vary between window managers and secret stores. Multiple key providers may be available:
   * [`org.freedesktop.portal.Secret`](https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.portal.Secret.html): Uses the Portal Secret D-Bus interface to retrieve application-specific secrets. This is the preferred provider for sandboxed environments like Flatpak.
@@ -76,6 +80,52 @@ This function on Linux will force the module to use an in memory password for cr
 symmetric key that is used for encrypt/decrypt functions when a valid OS password
 manager cannot be determined for the current active desktop environment. This function
 is a no-op on Windows and MacOS.
+
+### `safeStorage.setUserVerificationRequirement(requirement)` _Windows_
+
+* `requirement` string - Can be `discouraged`, `preferred` or `required`. Default is `discouraged`.
+
+Sets whether the `safeStorage` encryption key must be unlocked with
+[Windows Hello](https://learn.microsoft.com/en-us/windows/apps/develop/security/windows-hello)
+(PIN, face or fingerprint).
+
+* `discouraged` - The key is protected by DPAPI only. No prompt is shown.
+* `preferred` - The key is protected by Windows Hello when it is available. If Windows
+  Hello is not set up, or the user cancels the prompt, new data is encrypted with the DPAPI key.
+* `required` - New data is encrypted only with the Windows Hello key. If Windows Hello is
+  not set up, or the user cancels the prompt, `isAsyncEncryptionAvailable()` resolves
+  `false` and `encryptStringAsync()` rejects. The next `safeStorage` call shows the prompt again.
+
+You must call this method before the first call to `isAsyncEncryptionAvailable()`,
+`encryptStringAsync()` or `decryptStringAsync()`. After that call, it throws if you
+try to change the value.
+
+Windows shows the Windows Hello prompt when `safeStorage` first needs the key in each
+app session. On the first use it can show two prompts: one to create the key credential and
+one to unlock it. Make the first `safeStorage` call in response to a user action, so that
+the prompt is not a surprise.
+
+Data that you encrypted before you called this method stays readable. `decryptStringAsync()`
+returns `shouldReEncrypt: true` for that data. Encrypt it again to move it to the Windows Hello key.
+
+This setting applies only to `safeStorage`. Cookie encryption continues to use DPAPI.
+
+> [!WARNING]
+> Data encrypted with the Windows Hello key cannot be recovered if the key credential
+> is lost. This occurs if the user resets Windows Hello, the TPM is cleared, or the
+> profile is moved to a different device. Only store data that your app can get again
+> (for example, a refresh token that the user can replace by signing in again).
+
+> [!NOTE]
+> Windows Hello stops other apps from decrypting your data silently. It does not
+> stop malware that runs as the same user from injecting code into your app's process
+> after the key is unlocked, or from showing its own Windows Hello prompt. The prompt
+> does not always show which app asked for it.
+
+### `safeStorage.getUserVerificationRequirement()` _Windows_
+
+Returns `string` - The value set with `safeStorage.setUserVerificationRequirement()`.
+Can be `discouraged`, `preferred` or `required`.
 
 ### `safeStorage.getSelectedStorageBackend()` _Linux_
 

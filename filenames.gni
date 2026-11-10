@@ -112,6 +112,8 @@ filenames = {
     "shell/browser/win/dark_mode.h",
     "shell/browser/win/install_dir_access.cc",
     "shell/browser/win/install_dir_access.h",
+    "shell/browser/win/windows_hello_key_provider.cc",
+    "shell/browser/win/windows_hello_key_provider.h",
     "shell/common/api/electron_api_native_image_win.cc",
     "shell/common/application_info_win.cc",
     "shell/common/language_util_win.cc",
