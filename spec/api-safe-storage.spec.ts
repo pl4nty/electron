@@ -29,6 +29,37 @@ describe('safeStorage module', () => {
     });
   });
 
+  ifdescribe(process.platform !== 'win32')('SafeStorage.setUserVerificationRequirement() on non-Windows', () => {
+    it('is not defined', () => {
+      expect((safeStorage as any).setUserVerificationRequirement).toBeUndefined();
+      expect((safeStorage as any).getUserVerificationRequirement).toBeUndefined();
+    });
+  });
+
+  ifdescribe(process.platform === 'win32')('SafeStorage.setUserVerificationRequirement()', () => {
+    it('defaults to discouraged', () => {
+      expect(safeStorage.getUserVerificationRequirement()).toBe('discouraged');
+    });
+
+    it('throws a TypeError for an unknown value', () => {
+      expect(() => safeStorage.setUserVerificationRequirement('sometimes' as any)).toThrow(TypeError);
+      expect(safeStorage.getUserVerificationRequirement()).toBe('discouraged');
+    });
+
+    it('accepts the current value after safeStorage has been used', async () => {
+      await safeStorage.isAsyncEncryptionAvailable();
+      expect(() => safeStorage.setUserVerificationRequirement('discouraged')).not.toThrow();
+    });
+
+    it('throws when changed after safeStorage has been used', async () => {
+      await safeStorage.isAsyncEncryptionAvailable();
+      expect(() => safeStorage.setUserVerificationRequirement('required')).toThrow(
+        /must be called before the first call/
+      );
+      expect(safeStorage.getUserVerificationRequirement()).toBe('discouraged');
+    });
+  });
+
   describe('SafeStorage.isAsyncEncryptionAvailable()', () => {
     it('should resolve true when async encryption is available', async () => {
       expect(await safeStorage.isAsyncEncryptionAvailable()).toBe(true);

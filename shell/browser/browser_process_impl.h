@@ -129,6 +129,20 @@ class BrowserProcessImpl : public BrowserProcess {
   void set_additional_os_crypt_async_provider_for_test(
       size_t precedence,
       std::unique_ptr<os_crypt_async::KeyProvider> provider) override;
+#if BUILDFLAG(IS_WIN)
+  // Returns the OSCryptAsync instance that safeStorage uses when the app asks
+  // for user verification. It has the DPAPI provider (so existing data still
+  // decrypts) and a Windows Hello provider with higher precedence. When
+  // |required| is true, the DPAPI key is used only to decrypt. Cookie
+  // encryption keeps using os_crypt_async().
+  os_crypt_async::OSCryptAsync* GetUserVerifyingOSCryptAsync(bool required);
+
+  // Discards the instance above so that the next call to
+  // GetUserVerifyingOSCryptAsync() asks Windows Hello again. The old instance
+  // is deleted in a later task because this can be called from inside its
+  // own callbacks.
+  void ResetUserVerifyingOSCryptAsync();
+#endif
   void CreateDevToolsProtocolHandler() override {}
   void CreateDevToolsAutoOpener() override {}
   void set_background_mode_manager_for_test(
@@ -173,6 +187,9 @@ class BrowserProcessImpl : public BrowserProcess {
   std::unique_ptr<metrics::MetricsServiceClient> metrics_service_client_;
 
   std::unique_ptr<os_crypt_async::OSCryptAsync> os_crypt_async_;
+#if BUILDFLAG(IS_WIN)
+  std::unique_ptr<os_crypt_async::OSCryptAsync> user_verifying_os_crypt_async_;
+#endif
 };
 
 #endif  // ELECTRON_SHELL_BROWSER_BROWSER_PROCESS_IMPL_H_

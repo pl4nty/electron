@@ -31,6 +31,10 @@ namespace gin {
 class ObjectTemplateBuilder;
 }  // namespace gin
 
+namespace gin_helper {
+class ErrorThrower;
+}  // namespace gin_helper
+
 namespace electron::api {
 
 class SafeStorage final : public gin::Wrappable<SafeStorage> {
@@ -77,6 +81,25 @@ class SafeStorage final : public gin::Wrappable<SafeStorage> {
 #if BUILDFLAG(IS_LINUX)
   std::string GetSelectedLinuxBackend();
 #endif
+
+#if BUILDFLAG(IS_WIN)
+  // Values match the WebAuthn UserVerificationRequirement enum.
+  enum class UserVerificationRequirement {
+    kDiscouraged,  // DPAPI only. The default.
+    kPreferred,    // Windows Hello if available, else DPAPI.
+    kRequired,     // Windows Hello only. DPAPI data can still be decrypted.
+  };
+
+  void SetUserVerificationRequirement(gin_helper::ErrorThrower thrower,
+                                      const std::string& requirement);
+  std::string GetUserVerificationRequirement() const;
+
+  UserVerificationRequirement user_verification_requirement_ =
+      UserVerificationRequirement::kDiscouraged;
+#endif
+
+  // Whether |encryptor_| can encrypt new data.
+  bool IsEncryptorAvailable() const;
 
   bool use_password_v10_ = false;
 

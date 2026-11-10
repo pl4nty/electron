@@ -16,6 +16,7 @@
 #include "shell/browser/javascript_environment.h"
 #include "shell/common/gin_converters/base_converter.h"
 #include "shell/common/gin_converters/callback_converter.h"
+#include "shell/common/gin_helper/error_thrower.h"
 #include "shell/common/gin_helper/wrappable_pointer_tags.h"
 #include "shell/common/node_includes.h"
 #include "shell/common/node_util.h"
@@ -80,6 +81,12 @@ gin::ObjectTemplateBuilder SafeStorage::GetObjectTemplateBuilder(
       .SetMethod("getSelectedStorageBackend",
                  &SafeStorage::GetSelectedLinuxBackend)
 #endif
+#if BUILDFLAG(IS_WIN)
+      .SetMethod("setUserVerificationRequirement",
+                 &SafeStorage::SetUserVerificationRequirement)
+      .SetMethod("getUserVerificationRequirement",
+                 &SafeStorage::GetUserVerificationRequirement)
+#endif
       ;
 }
 
@@ -89,7 +96,17 @@ void SafeStorage::EnsureAsyncEncryptorRequested() {
     return;
   encryptor_requested_ = true;
   v8::Isolate* isolate = JavascriptEnvironment::GetIsolate();
-  g_browser_process->os_crypt_async()->GetInstance(
+  os_crypt_async::OSCryptAsync* os_crypt = g_browser_process->os_crypt_async();
+#if BUILDFLAG(IS_WIN)
+  if (user_verification_requirement_ !=
+      UserVerificationRequirement::kDiscouraged) {
+    os_crypt = static_cast<BrowserProcessImpl*>(g_browser_process)
+                   ->GetUserVerifyingOSCryptAsync(
+                       user_verification_requirement_ ==
+                       UserVerificationRequirement::kRequired);
+  }
+#endif
+  os_crypt->GetInstance(
       base::BindOnce(&SafeStorage::OnOsCryptReady,
                      gin::WrapPersistent(weak_factory_.GetWeakCell(
                          isolate->GetCppHeap()->GetAllocationHandle()))));
@@ -103,8 +120,9 @@ void SafeStorage::OnOsCryptReady(
   v8::Isolate* isolate = JavascriptEnvironment::GetIsolate();
   v8::HandleScope handle_scope(isolate);
 
+  const bool available = IsEncryptorAvailable();
   for (auto& pending : pending_availability_checks_) {
-    pending.Resolve(true);
+    pending.Resolve(available);
   }
   pending_availability_checks_.clear();
 
@@ -146,6 +164,34 @@ void SafeStorage::OnOsCryptReady(
     }
   }
   pending_decrypts_.clear();
+
+#if BUILDFLAG(IS_WIN)
+  // Windows Hello was cancelled or is not available, so this encryptor cannot
+  // encrypt. Drop it so that the next safeStorage call asks Windows Hello
+  // again instead of failing until the app restarts.
+  if (!available && user_verification_requirement_ ==
+                        UserVerificationRequirement::kRequired) {
+    encryptor_.reset();
+    encryptor_requested_ = false;
+    static_cast<BrowserProcessImpl*>(g_browser_process)
+        ->ResetUserVerifyingOSCryptAsync();
+  }
+#endif
+}
+
+bool SafeStorage::IsEncryptorAvailable() const {
+  if (!encryptor_)
+    return false;
+#if BUILDFLAG(IS_WIN)
+  // The Windows Hello key can be missing (prompt cancelled, Hello not set up).
+  // Only check in this mode: on other configurations IsEncryptionAvailable()
+  // can be false even though encryption works through a fallback path.
+  if (user_verification_requirement_ !=
+      UserVerificationRequirement::kDiscouraged) {
+    return encryptor_->IsEncryptionAvailable();
+  }
+#endif
+  return true;
 }
 
 const gin::WrapperInfo* SafeStorage::wrapper_info() const {
@@ -182,7 +228,7 @@ v8::Local<v8::Promise> SafeStorage::IsAsyncEncryptionAvailable(
   EnsureAsyncEncryptorRequested();
 
   if (encryptor_) {
-    promise.Resolve(true);
+    promise.Resolve(IsEncryptorAvailable());
     return handle;
   }
 
@@ -193,6 +239,46 @@ v8::Local<v8::Promise> SafeStorage::IsAsyncEncryptionAvailable(
 void SafeStorage::SetUsePasswordV10(bool use) {
   use_password_v10_ = use;
 }
+
+#if BUILDFLAG(IS_WIN)
+void SafeStorage::SetUserVerificationRequirement(
+    gin_helper::ErrorThrower thrower,
+    const std::string& requirement) {
+  UserVerificationRequirement value;
+  if (requirement == "discouraged") {
+    value = UserVerificationRequirement::kDiscouraged;
+  } else if (requirement == "preferred") {
+    value = UserVerificationRequirement::kPreferred;
+  } else if (requirement == "required") {
+    value = UserVerificationRequirement::kRequired;
+  } else {
+    thrower.ThrowTypeError(
+        "requirement must be 'discouraged', 'preferred' or 'required'");
+    return;
+  }
+
+  if (encryptor_requested_ && value != user_verification_requirement_) {
+    thrower.ThrowError(
+        "safeStorage.setUserVerificationRequirement() must be called before "
+        "the first call to isAsyncEncryptionAvailable(), "
+        "encryptStringAsync() or decryptStringAsync()");
+    return;
+  }
+
+  user_verification_requirement_ = value;
+}
+
+std::string SafeStorage::GetUserVerificationRequirement() const {
+  switch (user_verification_requirement_) {
+    case UserVerificationRequirement::kDiscouraged:
+      return "discouraged";
+    case UserVerificationRequirement::kPreferred:
+      return "preferred";
+    case UserVerificationRequirement::kRequired:
+      return "required";
+  }
+}
+#endif
 
 #if BUILDFLAG(IS_LINUX)
 std::string SafeStorage::GetSelectedLinuxBackend() {

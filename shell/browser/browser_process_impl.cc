@@ -7,6 +7,7 @@
 #include <memory>
 
 #include <utility>
+#include <vector>
 
 #include "base/command_line.h"
 #include "base/files/file_path.h"
@@ -14,6 +15,7 @@
 #include "base/functional/bind.h"
 #include "base/notimplemented.h"
 #include "base/path_service.h"
+#include "base/task/sequenced_task_runner.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/hid/hid_system_tray_icon.h"
 #include "chrome/browser/usb/usb_system_tray_icon.h"
@@ -69,6 +71,7 @@
 #if BUILDFLAG(IS_WIN)
 #include "components/os_crypt/async/browser/dpapi_key_provider.h"
 #include "components/os_crypt/async/browser/os_crypt_win.h"
+#include "shell/browser/win/windows_hello_key_provider.h"
 #endif
 
 #if BUILDFLAG(IS_MAC)
@@ -199,6 +202,7 @@ void BrowserProcessImpl::PostEarlyInitialization() {
 
 #if BUILDFLAG(IS_WIN)
   os_crypt_async::RegisterLocalPrefs(pref_registry.get());
+  electron::WindowsHelloKeyProvider::RegisterLocalPrefs(pref_registry.get());
 #endif
 
 #if BUILDFLAG(IS_LINUX)
@@ -573,6 +577,58 @@ void BrowserProcessImpl::CreateOSCryptAsync() {
   os_crypt_async_ =
       std::make_unique<os_crypt_async::OSCryptAsync>(std::move(providers));
 }
+
+#if BUILDFLAG(IS_WIN)
+namespace {
+
+// Wraps a KeyProvider so that its key decrypts existing data but is never used
+// to encrypt new data.
+class DecryptOnlyKeyProvider : public os_crypt_async::KeyProvider {
+ public:
+  explicit DecryptOnlyKeyProvider(
+      std::unique_ptr<os_crypt_async::KeyProvider> provider)
+      : provider_(std::move(provider)) {}
+  ~DecryptOnlyKeyProvider() override = default;
+
+  void GetKey(KeyCallback callback) override {
+    provider_->GetKey(std::move(callback));
+  }
+  bool UseForEncryption() override { return false; }
+
+ private:
+  std::unique_ptr<os_crypt_async::KeyProvider> provider_;
+};
+
+}  // namespace
+
+os_crypt_async::OSCryptAsync* BrowserProcessImpl::GetUserVerifyingOSCryptAsync(
+    bool required) {
+  if (!user_verifying_os_crypt_async_) {
+    std::unique_ptr<os_crypt_async::KeyProvider> dpapi =
+        std::make_unique<os_crypt_async::DPAPIKeyProvider>(local_state());
+    if (required)
+      dpapi = std::make_unique<DecryptOnlyKeyProvider>(std::move(dpapi));
+
+    std::vector<std::pair<os_crypt_async::OSCryptAsync::Precedence,
+                          std::unique_ptr<os_crypt_async::KeyProvider>>>
+        providers;
+    providers.emplace_back(/*precedence=*/10u, std::move(dpapi));
+    providers.emplace_back(
+        /*precedence=*/20u,
+        std::make_unique<electron::WindowsHelloKeyProvider>(local_state()));
+    user_verifying_os_crypt_async_ =
+        std::make_unique<os_crypt_async::OSCryptAsync>(std::move(providers));
+  }
+  return user_verifying_os_crypt_async_.get();
+}
+
+void BrowserProcessImpl::ResetUserVerifyingOSCryptAsync() {
+  if (user_verifying_os_crypt_async_) {
+    base::SequencedTaskRunner::GetCurrentDefault()->DeleteSoon(
+        FROM_HERE, std::move(user_verifying_os_crypt_async_));
+  }
+}
+#endif  // BUILDFLAG(IS_WIN)
 
 void BrowserProcessImpl::CreateMetricsServiceClient() {
   metrics_service_client_ =

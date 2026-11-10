@@ -897,6 +897,7 @@ source_set("electron_lib") {
       "//components/app_launch_prefetch",
       "//components/crash/core/app:crash_export_thunks",
       "//components/os_crypt/async/browser:dpapi_key_provider",
+      "//crypto",
       "//third_party/libxml:xml_writer",
       "//ui/color:accent_color_observer",
       "//ui/wm",
